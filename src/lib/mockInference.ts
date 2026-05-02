@@ -96,6 +96,75 @@ export interface InferenceInput {
   expand?: boolean;
 }
 
+// Pull out a noun-ish keyword the character can echo back. Doesn't need to be
+// linguistically correct — even partial keyword echoing makes the mock feel
+// less robotic than pure templates.
+function extractKeyword(text: string): string | null {
+  const stripped = text.replace(/[、。！？!?…\.\s]+/g, " ").trim();
+  if (!stripped) return null;
+  const tokens = stripped.split(" ").filter((t) => t.length >= 2);
+  tokens.sort((a, b) => b.length - a.length);
+  const raw = tokens[0] ?? stripped;
+  // Strip common Japanese sentence-ending particles/copulas so the echo
+  // sounds more natural ("寒い" rather than "今日は寒いですね").
+  const trimmed = raw
+    .replace(/(ですね|ですか|でしょうか|でしょう|ですよ|です|だよ|だね|ます|ました|ません|なんです|かな|よね|ね|よ|か)$/u, "")
+    .replace(/^(あの|その|この|えっと|あー|あー、|うーん|まあ)/u, "");
+  return (trimmed || raw).slice(0, 8);
+}
+
+const FOLLOWUPS_BY_EMOTION: Record<string, string[]> = {
+  joy: [
+    "そう聞けて、ちょっと嬉しいです。",
+    "それ、いいですね。もう少し聞きたいです。",
+    "わ、なんか元気もらいました。",
+  ],
+  calm: [
+    "うんうん。",
+    "そうなんですね。",
+    "わかります、その感じ。",
+  ],
+  anxiety: [
+    "あ……えっと、はい。",
+    "ちょっとドキドキしますね。",
+    "私もそういうとこあります……。",
+  ],
+  confusion: [
+    "ん？ えっと、それは……？",
+    "ごめんなさい、もう一度いいですか？",
+    "うーん、ちょっと整理させてください。",
+  ],
+};
+
+function buildMockReply(args: {
+  characterId: string;
+  userText: string;
+  dom: string;
+  c: { templates: Record<string, string[]>; proactiveLines: string[]; expandLines: string[] };
+  proactive?: boolean;
+  expand?: boolean;
+}): string {
+  const { userText, dom, c, proactive, expand } = args;
+  if (proactive) return pick(c.proactiveLines);
+  if (expand) return pick(c.expandLines);
+
+  const kw = extractKeyword(userText);
+  const followup = pick(FOLLOWUPS_BY_EMOTION[dom] ?? FOLLOWUPS_BY_EMOTION.calm);
+  // Half the time, echo the keyword. Other half, use a plain template, but
+  // prefix with a varied filler so back-to-back replies don't look identical.
+  if (kw && Math.random() < 0.55) {
+    const echoes = [
+      `${kw}、ですか。${followup}`,
+      `${kw}って、いいですね。${followup}`,
+      `${kw}……なるほど。${followup}`,
+      `そっか、${kw}か。${followup}`,
+    ];
+    return pick(echoes);
+  }
+  const fillers = ["", "あ、", "うん、", "そっか、", "なるほど、"];
+  return `${pick(fillers)}${pick(c.templates[dom])}`;
+}
+
 export function runMockTurn(input: InferenceInput): TurnResponse {
   const c = CHARACTERS[input.characterId];
   if (!c) throw new Error(`unknown character_id: ${input.characterId}`);
@@ -104,14 +173,14 @@ export function runMockTurn(input: InferenceInput): TurnResponse {
   const next = applyBias(input.prevEmotion, bias);
   const dom = dominant(next);
 
-  let text: string;
-  if (input.proactive) {
-    text = pick(c.proactiveLines);
-  } else if (input.expand) {
-    text = pick(c.expandLines);
-  } else {
-    text = pick(c.templates[dom]);
-  }
+  const text = buildMockReply({
+    characterId: input.characterId,
+    userText: input.userText,
+    dom,
+    c,
+    proactive: input.proactive,
+    expand: input.expand,
+  });
 
   const reaction = pick(c.bubbles[dom]);
   const summary = summarize(input.prevEmotion, next);

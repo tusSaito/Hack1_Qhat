@@ -1,11 +1,21 @@
 import { NextResponse } from "next/server";
 import { runMockTurn } from "@/lib/mockInference";
+import { isGeminiConfigured, NoLLMKeyError, runGeminiTurn } from "@/lib/llm";
 import { validateTurnRequest, ValidationError } from "@/lib/validate";
 import { checkRateLimit, clientKey } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
+// Gemini calls can take a couple of seconds; let Vercel give us headroom.
+export const maxDuration = 30;
 
-const MAX_BODY_BYTES = 16 * 1024;
+const MAX_BODY_BYTES = 64 * 1024;
+
+export async function GET() {
+  // Lightweight status probe so the client can show a Mock/LLM badge.
+  return NextResponse.json({
+    mode: isGeminiConfigured() ? "gemini" : "mock",
+  });
+}
 
 export async function POST(req: Request) {
   const limit = checkRateLimit(clientKey(req));
@@ -43,12 +53,24 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: message }, { status: 400 });
   }
 
+  // Try Gemini first; fall back to mock if no key or anything goes wrong.
+  if (isGeminiConfigured()) {
+    try {
+      const out = await runGeminiTurn(parsed);
+      return NextResponse.json({ ...out, mode: "gemini" });
+    } catch (e) {
+      if (!(e instanceof NoLLMKeyError)) {
+        // Log to server for debugging; don't surface to client.
+        console.error("Gemini error, falling back to mock:", (e as Error).message);
+      }
+    }
+  }
+
   let result;
   try {
     result = runMockTurn(parsed);
   } catch {
     return NextResponse.json({ error: "inference failed" }, { status: 500 });
   }
-  await new Promise((r) => setTimeout(r, 350 + Math.random() * 400));
-  return NextResponse.json(result);
+  return NextResponse.json({ ...result, mode: "mock" });
 }

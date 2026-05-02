@@ -30,7 +30,8 @@ const SILENCE_MS = 1_500;
 // hands-free: how long the user must stay silent (after some speech) before
 // the system auto-submits. Long enough to handle natural mid-sentence pauses,
 // short enough to feel responsive.
-const HANDS_FREE_SUBMIT_MS = 2_500;
+const HANDS_FREE_SUBMIT_MS = 3_500;
+const HANDS_FREE_MIN_CHARS = 3;
 
 export function ConversationClient({ scene }: { scene: Scene }) {
   const character = CHARACTERS[scene.characterId];
@@ -69,6 +70,7 @@ export function ConversationClient({ scene }: { scene: Scene }) {
   const [showLog, setShowLog] = useState(false);
   const [started, setStarted] = useState(false);
   const [handsFree, setHandsFree] = useState(true);
+  const [mode, setMode] = useState<string | null>(null);
   const lastSoundAtRef = useRef<number>(Date.now());
   const hasSpokenRef = useRef(false);
   const lastReaction = messages[messages.length - 1]?.reactionBubble;
@@ -82,6 +84,15 @@ export function ConversationClient({ scene }: { scene: Scene }) {
     hasSpokenRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene.id]);
+
+  // Probe the API mode (mock vs gemini) once on mount so the header badge
+  // tells the user what they're actually talking to.
+  useEffect(() => {
+    fetch("/api/turn")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.mode && setMode(d.mode))
+      .catch(() => {});
+  }, []);
 
   const handleSceneStart = useCallback(
     ({ handsFree: hf }: { handsFree: boolean }) => {
@@ -151,10 +162,19 @@ export function ConversationClient({ scene }: { scene: Scene }) {
       opts: { proactive?: boolean; expand?: boolean } = {}
     ) => {
       setThinking(true);
-      // Read latest emotion at call time, not closure-captured time.
-      const latestEmotion = useQhat.getState().emotion;
-      const latestRedo = useQhat.getState().redoCount;
-      let data: TurnResponse;
+      // Read latest state at call time, not closure-captured time.
+      const state = useQhat.getState();
+      const latestEmotion = state.emotion;
+      const latestRedo = state.redoCount;
+      // Trim history to the most recent slice so the LLM context stays small.
+      const history = state.messages.slice(-20).map((m) => ({
+        id: m.id,
+        role: m.role,
+        text: m.text,
+        timestamp: m.timestamp,
+        speaker: m.speaker,
+      }));
+      let data: TurnResponse & { mode?: string };
       try {
         const res = await fetch("/api/turn", {
           method: "POST",
@@ -163,6 +183,8 @@ export function ConversationClient({ scene }: { scene: Scene }) {
             user_text: userText,
             prev_emotion: latestEmotion,
             character_id: scene.characterId,
+            scene_id: scene.id,
+            history,
             redo_count: latestRedo,
             proactive: opts.proactive,
             expand: opts.expand,
@@ -174,6 +196,7 @@ export function ConversationClient({ scene }: { scene: Scene }) {
         setThinking(false);
         return;
       }
+      if (data.mode) setMode(data.mode);
       const msg = data.characterMessage;
       updateEmotion(msg.emotion!);
       pushMessage(msg);
@@ -254,7 +277,10 @@ export function ConversationClient({ scene }: { scene: Scene }) {
       const silentFor = Date.now() - lastSoundAtRef.current;
       // Only fire once we have meaningful draft and the user has clearly
       // finished speaking (silence beyond threshold).
-      if (silentFor > HANDS_FREE_SUBMIT_MS && draftText.trim().length >= 2) {
+      if (
+        silentFor > HANDS_FREE_SUBMIT_MS &&
+        draftText.trim().length >= HANDS_FREE_MIN_CHARS
+      ) {
         handleObserveRef.current();
       }
     }, 250);
@@ -349,6 +375,22 @@ export function ConversationClient({ scene }: { scene: Scene }) {
           </Link>
           <span className="text-ink-pale">/</span>
           <span className="font-mincho text-sm text-ink-soft">{scene.title}</span>
+          {mode && (
+            <span
+              className={`label-en text-[10px] px-2 py-0.5 rounded-full border ${
+                mode === "gemini"
+                  ? "border-gold text-gold bg-gold-soft/30"
+                  : "border-line text-ink-pale"
+              }`}
+              title={
+                mode === "gemini"
+                  ? "Gemini 2.5 Flash で会話中"
+                  : "テンプレ応答中。GEMINI_API_KEY を設定すると LLM 応答に切り替わります。"
+              }
+            >
+              {mode === "gemini" ? "● LLM" : "● Mock"}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-ink-soft">

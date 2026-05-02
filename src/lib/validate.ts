@@ -1,8 +1,13 @@
-import type { Emotion, EmotionProbs } from "./types";
+import type { Emotion, EmotionProbs, Message, Role } from "./types";
 
 const EMOTION_KEYS: Emotion[] = ["joy", "calm", "anxiety", "confusion"];
 
 const ALLOWED_CHARACTER_IDS = new Set(["sakura", "takahashi", "tanaka"]);
+const ALLOWED_SCENE_IDS = new Set([
+  "kanto_offline",
+  "job_interview",
+  "senpai_ask",
+]);
 
 export class ValidationError extends Error {}
 
@@ -20,13 +25,36 @@ export interface ValidatedTurnRequest {
   userText: string;
   prevEmotion: EmotionProbs;
   characterId: string;
+  sceneId: string;
   redoCount: number;
   proactive: boolean;
   expand: boolean;
+  history: Message[];
 }
 
 const MAX_USER_TEXT = 2000;
 const MAX_REDO_COUNT = 1000;
+const MAX_HISTORY = 30;
+const MAX_HISTORY_MSG_LEN = 1500;
+
+function validateMessage(raw: unknown): Message | null {
+  if (!isPlainObject(raw)) return null;
+  const role = raw.role;
+  if (role !== "user" && role !== "character") return null;
+  const text = raw.text;
+  if (typeof text !== "string" || text.length === 0) return null;
+  if (text.length > MAX_HISTORY_MSG_LEN) return null;
+  return {
+    id: typeof raw.id === "string" ? raw.id : `m_${Math.random()}`,
+    role: role as Role,
+    text,
+    timestamp:
+      typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)
+        ? raw.timestamp
+        : Date.now(),
+    speaker: typeof raw.speaker === "string" ? raw.speaker : undefined,
+  };
+}
 
 export function validateTurnRequest(raw: unknown): ValidatedTurnRequest {
   if (!isPlainObject(raw)) throw new ValidationError("body must be a JSON object");
@@ -38,6 +66,11 @@ export function validateTurnRequest(raw: unknown): ValidatedTurnRequest {
   const characterId = raw.character_id;
   if (typeof characterId !== "string" || !ALLOWED_CHARACTER_IDS.has(characterId)) {
     throw new ValidationError("invalid character_id");
+  }
+
+  const sceneId = typeof raw.scene_id === "string" ? raw.scene_id : "";
+  if (sceneId && !ALLOWED_SCENE_IDS.has(sceneId)) {
+    throw new ValidationError("invalid scene_id");
   }
 
   const prev = raw.prev_emotion;
@@ -56,12 +89,27 @@ export function validateTurnRequest(raw: unknown): ValidatedTurnRequest {
     throw new ValidationError("invalid redo_count");
   }
 
+  // Conversation history is optional (mock can run without it). Cap length so
+  // a malicious caller can't blow up the LLM context window.
+  let history: Message[] = [];
+  const rawHistory = raw.history;
+  if (Array.isArray(rawHistory)) {
+    if (rawHistory.length > MAX_HISTORY) {
+      throw new ValidationError("history too long");
+    }
+    history = rawHistory
+      .map(validateMessage)
+      .filter((m): m is Message => m !== null);
+  }
+
   return {
     userText,
     prevEmotion,
     characterId,
+    sceneId,
     redoCount: Math.floor(redoCount),
     proactive: raw.proactive === true,
     expand: raw.expand === true,
+    history,
   };
 }
