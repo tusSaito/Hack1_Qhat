@@ -3,8 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import type { Scene, TurnResponse, Message, EmotionProbs } from "@/lib/types";
+import type { Scene, TurnResponse } from "@/lib/types";
 import { CHARACTERS } from "@/lib/characters";
 import { useQhat } from "@/lib/store";
 import { ConversationLog } from "@/components/ConversationLog";
@@ -27,7 +26,6 @@ const PROACTIVE_MAX = 4;
 const SILENCE_MS = 1_500;
 
 export function ConversationClient({ scene }: { scene: Scene }) {
-  const router = useRouter();
   const character = CHARACTERS[scene.characterId];
   const {
     setScene,
