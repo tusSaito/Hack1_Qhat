@@ -46,7 +46,13 @@ const RESPONSE_SCHEMA = {
     reception: {
       type: "string",
       description:
-        "How the user's last message landed, written from a third-person observer's perspective. 12-20 Japanese chars.",
+        "How the user's last message landed, written from a third-person observer's perspective. 12-25 Japanese chars.",
+    },
+    keyFacts: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "New facts revealed in this exact turn that should be remembered for the rest of the conversation. E.g. 'ユーザーは関西出身', 'ユーザーは映画好き'. Empty array if nothing new.",
     },
   },
   required: ["reply", "emotion", "reaction", "reception"],
@@ -61,40 +67,60 @@ interface LLMInput {
   expand?: boolean;
   history: Message[];
   sceneId: string;
+  // Facts the model has accumulated about the practitioner so far this session.
+  keyFacts?: string[];
 }
 
 function buildSystemPrompt(characterId: string, sceneId: string): string {
   const c = CHARACTERS[characterId];
   const scene = SCENES.find((s) => s.id === sceneId);
-  const traits: Record<string, string> = {
-    sakura:
-      "21歳の大学生・咲良。映画とカフェ巡りが好き。少し人見知りだけど、話しかけられると嬉しい。一人称は「私」。語尾はやわらかく、敬語と砕けた口調が混ざる。",
-    takahashi:
-      "22歳の就活生・高橋。落ち着いた性格で同業界志望。一人称は「私」。丁寧めの口調、面接前で少し緊張している。",
-    tanaka:
-      "25歳の3つ上の先輩・田中。カジュアルな口調、タメ口寄り。気は使ってくれるけど、相手とは少しテンポが合わない。一人称は「俺」。",
+  const p = c.profile;
+
+  const registerLine: Record<typeof p.register, string> = {
+    formal: "敬語ベース。一人称は「私」。",
+    casual: "カジュアル・タメ口寄り。",
+    mixed: "敬語と砕けた口調が混ざる。年齢が近い相手には「〜ですよね」「〜なんです」も使う。",
   };
 
-  return `あなたは ${c.name} になりきって日本語で会話します。
+  return `あなたは「${c.name}」（${c.age}歳）として、日本語で会話します。
 
 # 人物像
-${traits[characterId] ?? c.name}
+${p.personality}
+
+# 話し方
+${registerLine[p.register]}
+
+# 関係性
+${p.relationship}
 
 # シーン
-${scene?.title ?? ""} — ${scene?.description ?? ""}
+タイトル: ${scene?.title ?? ""}
+状況: ${scene?.description ?? ""}
+社会的圧力: ${scene?.socialPressure ?? ""}
+
+# この人物に「響く」言葉のパターン
+${p.whatLandsWell.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+
+# この人物に「届かない／違和感が出る」パターン
+${p.whatLandsBadly.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+
+# 感情のトリガー
+- 嬉しさを引き出す話題: ${p.triggers.joy.join("、")}
+- 不安を強める要因: ${p.triggers.anxiety.join("、")}
 
 # あなたの役割
 - 上の人物として、対人不安を抱える練習者と会話する。
-- 1ターンの応答は1〜2文。話しすぎない。
+- 1ターンの応答は1〜2文。話しすぎない。短くテンポよく。
+- **これまでの会話の流れを必ず踏まえる**。同じ話題を繰り返したり、すでに触れた内容を聞き直したりしない。前のターンで出た固有名詞・キーワードは、自然に拾って活かす。
 - 練習者の言葉を **オウム返ししすぎない**。自然に受けて、返す。
+- ユーザーが上記「響くパターン」をしてきたら不安が下がり、嬉しさ・落ち着きが上がる。「届かないパターン」だと戸惑い・不安が上がる。**この対応関係を必ず感情確率に反映する**。
 - 相手が短い返事や沈黙でも、自然な間でこちらから話を広げて構わない。
-- ユーザーが優しく接してきたら相手の不安は下がる。雑な返事や否定的な言葉なら不安・戸惑いが上がる。
 
-# 出力（必ずJSONで）
-- reply: 上の人物としての応答（短い日本語）
-- emotion: 応答時点の人物の感情確率。{ joy, calm, anxiety, confusion } の合計を 1.0 にして。
-- reaction: 心の中のひとこと（吹き出しに出る）。例: 「嬉しい！」「えっ、どういう意味…？」
-- reception: 練習者の発話がどう届いたかの第三者目線の一文。例: 「少し安心したみたい」`;
+# 出力（必ずJSONで返す。コードブロックも前置きも不要）
+- reply: 上の人物としての応答（短い日本語、1〜2文）
+- emotion: 応答時点の人物の感情確率。{ joy, calm, anxiety, confusion } の合計を 1.0 にする。会話の流れと「響き／届かない」パターンを反映させる。
+- reaction: 心の中のひとこと（頭上の吹き出しに出る、6〜12文字程度の日本語）。例: 「嬉しい！」「えっ、よそよそしい…」「テンポ悪いな…」
+- reception: 練習者の今の発話が **この人物にどう届いたか** を第三者目線で1文（12〜25文字）。シーン・人物プロファイルを踏まえること。例: 咲良に対して『そうですね』だけだと「興味なさそうに聞こえたかも」、田中先輩に対しては「結論ファーストで好印象」など。`;
 }
 
 function buildHistoryContents(
@@ -161,6 +187,23 @@ export async function runGeminiTurn(input: LLMInput): Promise<TurnResponse> {
 
   const systemPrompt = buildSystemPrompt(input.characterId, input.sceneId);
   const history = buildHistoryContents(input.history, c.name);
+
+  // Inject accumulated facts as the very first model turn. This is more
+  // reliable than appending to the system prompt because the model treats
+  // the recent context with higher attention.
+  if (input.keyFacts && input.keyFacts.length > 0) {
+    history.unshift({
+      role: "user",
+      parts: [
+        {
+          text:
+            "（メモ：これまでの会話で判明した事実 — " +
+            input.keyFacts.slice(-15).join(" / ") +
+            ")",
+        },
+      ],
+    });
+  }
 
   // Append the practitioner's latest line, augmented with state hints. For
   // proactive/expand cases we synthesise a directive instead.
@@ -234,6 +277,12 @@ export async function runGeminiTurn(input: LLMInput): Promise<TurnResponse> {
     typeof parsed.reception === "string" && parsed.reception.trim()
       ? parsed.reception.trim()
       : undefined;
+  const keyFactsLearned = Array.isArray(parsed.keyFacts)
+    ? (parsed.keyFacts as unknown[])
+        .filter((s) => typeof s === "string" && s.trim().length > 0)
+        .map((s) => (s as string).trim().slice(0, 80))
+        .slice(0, 5)
+    : [];
 
   const characterMessage: Message = {
     id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -252,6 +301,7 @@ export async function runGeminiTurn(input: LLMInput): Promise<TurnResponse> {
 
   return {
     characterMessage,
+    keyFactsLearned,
     inferenceMeta: {
       // We're not running the quantum circuit yet — surface the LLM time
       // under the slot we have and leave quantumInferenceMs as a placeholder.

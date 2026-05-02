@@ -19,12 +19,32 @@ export interface Message {
   redoCount?: number;
 }
 
+export interface CharacterProfile {
+  // Multi-paragraph personality picture used in the LLM system prompt.
+  personality: string;
+  // Expected speech register: 敬語 / カジュアル / mixed.
+  register: "formal" | "casual" | "mixed";
+  // Patterns the user can use that this character responds well to.
+  // Each entry is a short Japanese sentence describing the pattern.
+  whatLandsWell: string[];
+  // Patterns that are technically polite but read as cold/wrong here.
+  whatLandsBadly: string[];
+  // Topics or words that pull each emotion up or down for this character.
+  triggers: {
+    joy: string[];
+    anxiety: string[];
+  };
+  // The relationship dynamic with the practitioner.
+  relationship: string;
+}
+
 export interface SceneCharacter {
   id: string;
   name: string;
   age: number;
   voice: { pitch: number; rate: number };
   accent: string;
+  profile: CharacterProfile;
   bubbles: Record<Emotion, string[]>;
   templates: Record<Emotion, string[]>;
   proactiveLines: string[];
@@ -35,6 +55,9 @@ export interface Scene {
   id: string;
   title: string;
   description: string;
+  // Why this scene matters socially — fed to the LLM so it understands
+  // pressure (e.g. "面接前の控室。沈黙が長いと評価に響く").
+  socialPressure: string;
   characterId: string;
   durationMin: number;
   difficulty: 1 | 2 | 3;
@@ -53,4 +76,7 @@ export interface InferenceMeta {
 export interface TurnResponse {
   characterMessage: Message;
   inferenceMeta: InferenceMeta;
+  // Facts the model identified in this turn that should be remembered for
+  // the rest of the session. Optional; mock returns no facts.
+  keyFactsLearned?: string[];
 }

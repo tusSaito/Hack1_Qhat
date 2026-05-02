@@ -91,9 +91,13 @@ export interface InferenceInput {
   userText: string;
   prevEmotion: EmotionProbs;
   characterId: string;
+  sceneId?: string;
   redoCount: number;
   proactive?: boolean;
   expand?: boolean;
+  // Mock ignores history/keyFacts; signature kept compatible with the LLM input.
+  history?: unknown;
+  keyFacts?: string[];
 }
 
 // Pull out a noun-ish keyword the character can echo back. Doesn't need to be

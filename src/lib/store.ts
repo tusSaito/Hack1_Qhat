@@ -19,6 +19,8 @@ interface QhatState {
   isRecording: boolean;
   isThinking: boolean;
   isSpeaking: boolean;
+  // Accumulated facts about the practitioner that the LLM has learned.
+  keyFacts: string[];
   setScene: (scene: Scene) => void;
   reset: () => void;
   pushMessage: (m: Message) => void;
@@ -34,6 +36,7 @@ interface QhatState {
   registerInteraction: () => void;
   registerProactive: () => void;
   toggleProactive: () => void;
+  addKeyFacts: (facts: string[]) => void;
 }
 
 const initial = {
@@ -51,6 +54,7 @@ const initial = {
   isRecording: false,
   isThinking: false,
   isSpeaking: false,
+  keyFacts: [] as string[],
 };
 
 export const useQhat = create<QhatState>((set, get) => ({
@@ -99,4 +103,16 @@ export const useQhat = create<QhatState>((set, get) => ({
     })),
   toggleProactive: () =>
     set((s) => ({ proactiveEnabled: !s.proactiveEnabled })),
+  addKeyFacts: (facts) =>
+    set((s) => {
+      if (facts.length === 0) return s;
+      const merged = [...s.keyFacts];
+      for (const f of facts) {
+        const trimmed = f.trim();
+        if (!trimmed) continue;
+        if (!merged.some((existing) => existing === trimmed)) merged.push(trimmed);
+      }
+      // Keep memory bounded; old facts decay first.
+      return { keyFacts: merged.slice(-30) };
+    }),
 }));

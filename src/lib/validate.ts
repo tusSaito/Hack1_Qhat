@@ -30,11 +30,12 @@ export interface ValidatedTurnRequest {
   proactive: boolean;
   expand: boolean;
   history: Message[];
+  keyFacts: string[];
 }
 
 const MAX_USER_TEXT = 2000;
 const MAX_REDO_COUNT = 1000;
-const MAX_HISTORY = 30;
+const MAX_HISTORY = 60;
 const MAX_HISTORY_MSG_LEN = 1500;
 
 function validateMessage(raw: unknown): Message | null {
@@ -102,6 +103,17 @@ export function validateTurnRequest(raw: unknown): ValidatedTurnRequest {
       .filter((m): m is Message => m !== null);
   }
 
+  let keyFacts: string[] = [];
+  const rawFacts = raw.key_facts;
+  if (Array.isArray(rawFacts)) {
+    keyFacts = rawFacts
+      .filter(
+        (f): f is string =>
+          typeof f === "string" && f.trim().length > 0 && f.length <= 200
+      )
+      .slice(0, 30);
+  }
+
   return {
     userText,
     prevEmotion,
@@ -111,5 +123,6 @@ export function validateTurnRequest(raw: unknown): ValidatedTurnRequest {
     proactive: raw.proactive === true,
     expand: raw.expand === true,
     history,
+    keyFacts,
   };
 }

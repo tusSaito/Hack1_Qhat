@@ -166,8 +166,8 @@ export function ConversationClient({ scene }: { scene: Scene }) {
       const state = useQhat.getState();
       const latestEmotion = state.emotion;
       const latestRedo = state.redoCount;
-      // Trim history to the most recent slice so the LLM context stays small.
-      const history = state.messages.slice(-20).map((m) => ({
+      // Send the bulk of the conversation so the LLM can stay in context.
+      const history = state.messages.slice(-40).map((m) => ({
         id: m.id,
         role: m.role,
         text: m.text,
@@ -185,6 +185,7 @@ export function ConversationClient({ scene }: { scene: Scene }) {
             character_id: scene.characterId,
             scene_id: scene.id,
             history,
+            key_facts: state.keyFacts,
             redo_count: latestRedo,
             proactive: opts.proactive,
             expand: opts.expand,
@@ -197,6 +198,9 @@ export function ConversationClient({ scene }: { scene: Scene }) {
         return;
       }
       if (data.mode) setMode(data.mode);
+      if (data.keyFactsLearned && data.keyFactsLearned.length > 0) {
+        useQhat.getState().addKeyFacts(data.keyFactsLearned);
+      }
       const msg = data.characterMessage;
       updateEmotion(msg.emotion!);
       pushMessage(msg);
