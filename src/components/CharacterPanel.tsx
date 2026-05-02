@@ -13,6 +13,7 @@ interface Props {
   reactionBubble?: string;
   reactionKey?: string | number;
   thinking?: boolean;
+  speaking?: boolean;
   proactive?: boolean;
 }
 
@@ -23,6 +24,7 @@ export function CharacterPanel({
   reactionBubble,
   reactionKey,
   thinking,
+  speaking,
   proactive,
 }: Props) {
   const c = CHARACTERS[characterId];
@@ -74,6 +76,7 @@ export function CharacterPanel({
             characterId={characterId}
             emotion={isHighEntropy ? "confusion" : dom}
             thinking={thinking}
+            speaking={speaking}
           />
         </div>
       </div>

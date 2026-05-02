@@ -16,6 +16,7 @@ import { useSpeechRecognition, speak } from "@/lib/speech";
 import { dominant } from "@/lib/emotion";
 import { EmotionBlob } from "@/components/EmotionBlob";
 import { MaMeter } from "@/components/MaMeter";
+import { SceneIntro } from "@/components/SceneIntro";
 
 const BlochSphere = dynamic(
   () => import("@/components/BlochSphere").then((m) => m.BlochSphere),
@@ -26,6 +27,10 @@ const PROACTIVE_IDLE_MS = 15_000;
 const PROACTIVE_COOLDOWN_MS = 20_000;
 const PROACTIVE_MAX = 4;
 const SILENCE_MS = 1_500;
+// hands-free: how long the user must stay silent (after some speech) before
+// the system auto-submits. Long enough to handle natural mid-sentence pauses,
+// short enough to feel responsive.
+const HANDS_FREE_SUBMIT_MS = 2_500;
 
 export function ConversationClient({ scene }: { scene: Scene }) {
   const character = CHARACTERS[scene.characterId];
@@ -62,24 +67,38 @@ export function ConversationClient({ scene }: { scene: Scene }) {
   const [level, setLevel] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [handsFree, setHandsFree] = useState(true);
   const lastSoundAtRef = useRef<number>(Date.now());
+  const hasSpokenRef = useRef(false);
   const lastReaction = messages[messages.length - 1]?.reactionBubble;
   const lastReactionId = messages[messages.length - 1]?.id;
 
-  // initialise scene once
+  // Set up scene state up-front so the underlying components can render
+  // sensibly while the intro screen is shown. The opening line is held back
+  // and only spoken after the user clicks 「始める」.
   useEffect(() => {
     setScene(scene);
-    // speak the opening line
-    if (scene.openingLine) {
-      const c = CHARACTERS[scene.characterId];
-      setSpeaking(true);
-      speak(scene.openingLine, {
-        ...c.voice,
-        onEnd: () => setSpeaking(false),
-      });
-    }
+    hasSpokenRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene.id]);
+
+  const handleSceneStart = useCallback(
+    ({ handsFree: hf }: { handsFree: boolean }) => {
+      setHandsFree(hf);
+      setStarted(true);
+      if (scene.openingLine && !hasSpokenRef.current) {
+        hasSpokenRef.current = true;
+        const c = CHARACTERS[scene.characterId];
+        setSpeaking(true);
+        speak(scene.openingLine, {
+          ...c.voice,
+          onEnd: () => setSpeaking(false),
+        });
+      }
+    },
+    [scene.characterId, scene.openingLine, setSpeaking]
+  );
 
   const recognition = useSpeechRecognition({
     onInterim: (text) => setDraft(text),
@@ -220,6 +239,28 @@ export function ConversationClient({ scene }: { scene: Scene }) {
     setDraft,
   ]);
 
+  // Hands-free auto-submit. While recording with non-empty draft, watch for
+  // silence (no audio above threshold) lasting > HANDS_FREE_SUBMIT_MS and then
+  // call observe automatically. Pauses while assistant is busy.
+  const handleObserveRef = useRef(handleObserve);
+  useEffect(() => {
+    handleObserveRef.current = handleObserve;
+  }, [handleObserve]);
+
+  useEffect(() => {
+    if (!handsFree || !started) return;
+    if (!isRecording || isThinking || isSpeaking) return;
+    const id = setInterval(() => {
+      const silentFor = Date.now() - lastSoundAtRef.current;
+      // Only fire once we have meaningful draft and the user has clearly
+      // finished speaking (silence beyond threshold).
+      if (silentFor > HANDS_FREE_SUBMIT_MS && draftText.trim().length >= 2) {
+        handleObserveRef.current();
+      }
+    }, 250);
+    return () => clearInterval(id);
+  }, [handsFree, isRecording, isThinking, isSpeaking, started, draftText]);
+
   // decoherence ticker
   useEffect(() => {
     const id = setInterval(() => {
@@ -265,6 +306,31 @@ export function ConversationClient({ scene }: { scene: Scene }) {
     registerProactive,
   ]);
 
+  // Hands-free: when the assistant finishes speaking and we are idle, kick
+  // recording back on so the user just talks back without pressing buttons.
+  const wasSpeakingRef = useRef(false);
+  const handleStartRecordingRef = useRef(handleStartRecording);
+  useEffect(() => {
+    handleStartRecordingRef.current = handleStartRecording;
+  }, [handleStartRecording]);
+
+  useEffect(() => {
+    if (!handsFree || !started) return;
+    if (wasSpeakingRef.current && !isSpeaking && !isThinking && !isRecording) {
+      // Add a small grace so the user has a beat to think before the mic opens.
+      const id = setTimeout(() => {
+        handleStartRecordingRef.current();
+      }, 500);
+      wasSpeakingRef.current = false;
+      return () => clearTimeout(id);
+    }
+    wasSpeakingRef.current = isSpeaking;
+  }, [handsFree, started, isSpeaking, isThinking, isRecording]);
+
+  if (!started) {
+    return <SceneIntro scene={scene} onStart={handleSceneStart} />;
+  }
+
   const silentNow =
     isRecording && Date.now() - lastSoundAtRef.current > SILENCE_MS;
   const lastCharMessage = [...messages].reverse().find((m) => m.role === "character");
@@ -285,6 +351,15 @@ export function ConversationClient({ scene }: { scene: Scene }) {
           <span className="font-mincho text-sm text-ink-soft">{scene.title}</span>
         </div>
         <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-ink-soft">
+            <input
+              type="checkbox"
+              checked={handsFree}
+              onChange={(e) => setHandsFree(e.target.checked)}
+              className="accent-gold"
+            />
+            ハンズフリー
+          </label>
           <label className="flex items-center gap-2 text-xs text-ink-soft">
             <input
               type="checkbox"
@@ -332,6 +407,7 @@ export function ConversationClient({ scene }: { scene: Scene }) {
               reactionBubble={lastReaction}
               reactionKey={lastReactionId}
               thinking={isThinking}
+              speaking={isSpeaking}
               proactive={lastCharMessage?.proactive}
             />
           </div>
