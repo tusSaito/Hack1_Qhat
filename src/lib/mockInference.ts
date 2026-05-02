@@ -98,6 +98,7 @@ export interface InferenceInput {
 
 export function runMockTurn(input: InferenceInput): TurnResponse {
   const c = CHARACTERS[input.characterId];
+  if (!c) throw new Error(`unknown character_id: ${input.characterId}`);
   const start = performance.now();
   const bias = computeBias(input.userText);
   const next = applyBias(input.prevEmotion, bias);

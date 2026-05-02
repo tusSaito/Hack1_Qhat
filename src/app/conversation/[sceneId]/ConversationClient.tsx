@@ -118,54 +118,66 @@ export function ConversationClient({ scene }: { scene: Scene }) {
     registerInteraction();
   }, [handleStopRecording, setDraft, incRedo, bumpDecoherence, registerInteraction]);
 
+  // Use a ref so async continuations always read the latest fn (avoids stale
+  // closures in the speech-onEnd → expand chain).
+  const callTurnRef = useRef<
+    (text: string, opts?: { proactive?: boolean; expand?: boolean }) => Promise<void>
+  >(async () => {});
+
   const callTurn = useCallback(
     async (
       userText: string,
       opts: { proactive?: boolean; expand?: boolean } = {}
     ) => {
       setThinking(true);
-      const res = await fetch("/api/turn", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_text: userText,
-          prev_emotion: emotion,
-          character_id: scene.characterId,
-          redo_count: redoCount,
-          proactive: opts.proactive,
-          expand: opts.expand,
-        }),
-      });
-      const data: TurnResponse = await res.json();
+      // Read latest emotion at call time, not closure-captured time.
+      const latestEmotion = useQhat.getState().emotion;
+      const latestRedo = useQhat.getState().redoCount;
+      let data: TurnResponse;
+      try {
+        const res = await fetch("/api/turn", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_text: userText,
+            prev_emotion: latestEmotion,
+            character_id: scene.characterId,
+            redo_count: latestRedo,
+            proactive: opts.proactive,
+            expand: opts.expand,
+          }),
+        });
+        if (!res.ok) throw new Error(`turn failed: ${res.status}`);
+        data = await res.json();
+      } catch {
+        setThinking(false);
+        return;
+      }
       const msg = data.characterMessage;
-      // store-side: prev = current, current = new
       updateEmotion(msg.emotion!);
       pushMessage(msg);
       setDecoherence(0);
       setThinking(false);
-      // speak
       setSpeaking(true);
       speak(msg.text, {
         ...character.voice,
         onEnd: () => {
           setSpeaking(false);
-          // topic expand for short replies
           if (
             !opts.proactive &&
             !opts.expand &&
             userText.trim().length <= 5 &&
+            userText.trim().length > 0 &&
             Math.random() < 0.5
           ) {
-            setTimeout(() => callTurn("", { expand: true }), 800);
+            setTimeout(() => callTurnRef.current("", { expand: true }), 800);
           }
         },
       });
     },
     [
       character.voice,
-      emotion,
       pushMessage,
-      redoCount,
       scene.characterId,
       setDecoherence,
       setSpeaking,
@@ -173,6 +185,10 @@ export function ConversationClient({ scene }: { scene: Scene }) {
       updateEmotion,
     ]
   );
+
+  useEffect(() => {
+    callTurnRef.current = callTurn;
+  }, [callTurn]);
 
   const handleObserve = useCallback(async () => {
     const text = draftText.trim();
