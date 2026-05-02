@@ -14,6 +14,8 @@ import { DecoherenceMeter } from "@/components/DecoherenceMeter";
 import { ReceptionPanel } from "@/components/ReceptionPanel";
 import { useSpeechRecognition, speak } from "@/lib/speech";
 import { dominant } from "@/lib/emotion";
+import { EmotionBlob } from "@/components/EmotionBlob";
+import { MaMeter } from "@/components/MaMeter";
 
 const BlochSphere = dynamic(
   () => import("@/components/BlochSphere").then((m) => m.BlochSphere),
@@ -58,6 +60,8 @@ export function ConversationClient({ scene }: { scene: Scene }) {
   } = useQhat();
 
   const [level, setLevel] = useState(0);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showLog, setShowLog] = useState(false);
   const lastSoundAtRef = useRef<number>(Date.now());
   const lastReaction = messages[messages.length - 1]?.reactionBubble;
   const lastReactionId = messages[messages.length - 1]?.id;
@@ -264,6 +268,10 @@ export function ConversationClient({ scene }: { scene: Scene }) {
   const silentNow =
     isRecording && Date.now() - lastSoundAtRef.current > SILENCE_MS;
   const lastCharMessage = [...messages].reverse().find((m) => m.role === "character");
+  // The "間" meter pauses while the user is recording, the assistant is
+  // generating, or the assistant is speaking back. Otherwise it counts up
+  // from the moment the conversation last advanced.
+  const maPaused = isRecording || isThinking || isSpeaking;
 
   return (
     <main className="min-h-screen flex flex-col">
@@ -286,6 +294,20 @@ export function ConversationClient({ scene }: { scene: Scene }) {
             />
             向こうから話しかけ
           </label>
+          <button
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="text-xs px-2 py-1 text-ink-pale hover:text-ink label-en"
+            aria-pressed={showAdvanced}
+          >
+            {showAdvanced ? "− Advanced" : "+ Advanced"}
+          </button>
+          <button
+            onClick={() => setShowLog((v) => !v)}
+            className="text-xs px-2 py-1 text-ink-pale hover:text-ink label-en"
+            aria-pressed={showLog}
+          >
+            {showLog ? "− Log" : "+ Log"}
+          </button>
           <Link
             href={`/review/${scene.id}`}
             className="text-xs px-3 py-1.5 border border-line rounded hover:border-ink"
@@ -295,100 +317,117 @@ export function ConversationClient({ scene }: { scene: Scene }) {
         </div>
       </header>
 
-      {/* body */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] gap-0">
-        {/* LEFT: Character */}
-        <aside className="border-r border-line bg-paper/40 px-5 py-6 flex flex-col">
-          <CharacterPanel
-            characterId={scene.characterId}
-            emotion={emotion}
-            decoherence={decoherence}
-            reactionBubble={lastReaction}
-            reactionKey={lastReactionId}
-            thinking={isThinking}
-            proactive={lastCharMessage?.proactive}
+      {/* MAIN STAGE — character + blob centered */}
+      <section className="flex-1 flex flex-col items-center justify-center px-6 py-6 relative">
+        <div className="relative flex items-center justify-center">
+          {/* watercolor blob behind the character */}
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none -z-0">
+            <EmotionBlob probs={emotion} decoherence={decoherence} size={420} />
+          </div>
+          <div className="relative z-10">
+            <CharacterPanel
+              characterId={scene.characterId}
+              emotion={emotion}
+              decoherence={decoherence}
+              reactionBubble={lastReaction}
+              reactionKey={lastReactionId}
+              thinking={isThinking}
+              proactive={lastCharMessage?.proactive}
+            />
+          </div>
+        </div>
+
+        {/* secondary feedback band: 間メーター + 短い感情ストリップ */}
+        <div className="w-full max-w-2xl mt-8 space-y-4">
+          <MaMeter
+            lastInteractionAt={lastInteractionAt}
+            paused={maPaused}
           />
-        </aside>
-
-        {/* CENTER: Log + recorder */}
-        <section className="flex flex-col h-[calc(100vh-49px)]">
-          <ConversationLog messages={messages} />
-          <div className="border-t border-line bg-white px-6 py-4">
-            {/* draft */}
-            <div className="min-h-[44px] mb-3 rounded border border-line bg-paper/50 px-3 py-2 font-mincho text-sm text-ink">
-              {draftText || (
-                <span className="text-ink-pale">
-                  {isRecording
-                    ? "聞いています…"
-                    : isThinking
-                    ? "考え中…"
-                    : isSpeaking
-                    ? "話しています…"
-                    : "🎤 を押して話してみて"}
-                </span>
-              )}
-            </div>
-            <Waveform level={level} silent={silentNow} active={isRecording} />
-            <div className="mt-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={
-                    isRecording ? handleStopRecording : handleStartRecording
-                  }
-                  disabled={isThinking || isSpeaking}
-                  className={`h-12 w-12 rounded-full flex items-center justify-center text-lg transition disabled:opacity-40 ${
-                    isRecording
-                      ? "bg-gold text-white animate-pulse-gold"
-                      : "border border-ink text-ink hover:bg-ink hover:text-paper"
-                  }`}
-                  aria-label={isRecording ? "録音停止" : "録音開始"}
-                >
-                  🎤
-                </button>
-                <button
-                  onClick={handleRedo}
-                  disabled={!draftText || isThinking || isSpeaking}
-                  className="px-3 py-2 text-xs border border-gold text-gold rounded hover:bg-gold-soft disabled:opacity-30"
-                >
-                  録り直す
-                  {redoCount > 0 && (
-                    <span className="mono ml-1 text-ink-pale">×{redoCount}</span>
-                  )}
-                </button>
-              </div>
-              <button
-                onClick={handleObserve}
-                disabled={!draftText.trim() || isThinking || isSpeaking}
-                className="px-6 py-2.5 bg-ink text-paper text-sm font-mincho rounded hover:bg-ink-soft disabled:opacity-30"
-              >
-                観測する →
-              </button>
-            </div>
-            {!recognition.supported && (
-              <p className="mt-2 text-[11px] text-purple">
-                このブラウザは音声認識に未対応です。Chrome / Edge をご利用ください。
-              </p>
-            )}
-          </div>
-        </section>
-
-        {/* RIGHT: Quantum panel */}
-        <aside className="border-l border-line bg-paper/40 px-5 py-6 space-y-5 overflow-y-auto h-[calc(100vh-49px)] scrollbar-thin">
-          <div>
-            <p className="label-en text-xs mb-2">Bloch Sphere</p>
-            <BlochSphere probs={emotion} decoherence={decoherence} />
-          </div>
-          <div>
-            <p className="label-en text-xs mb-2">Emotion</p>
+          <div className="grid grid-cols-2 gap-4">
             <EmotionBars probs={emotion} />
+            <ReceptionPanel
+              prev={prevEmotion}
+              curr={emotion}
+              summary={lastCharMessage?.receptionSummary}
+            />
           </div>
           <DecoherenceMeter value={decoherence} />
-          <ReceptionPanel
-            prev={prevEmotion}
-            curr={emotion}
-            summary={lastCharMessage?.receptionSummary}
-          />
-        </aside>
+        </div>
+
+        {/* Advanced: Bloch sphere — opt-in for the physics-curious */}
+        {showAdvanced && (
+          <div className="w-full max-w-md mt-8 border-t border-line pt-6">
+            <p className="label-en text-xs mb-2 text-center">Bloch Sphere (advanced)</p>
+            <BlochSphere probs={emotion} decoherence={decoherence} />
+          </div>
+        )}
+      </section>
+
+      {/* BOTTOM DRAWER — conversation log (collapsible) */}
+      {showLog && (
+        <div className="border-t border-line bg-paper/60 max-h-[28vh] overflow-hidden flex flex-col">
+          <ConversationLog messages={messages} />
+        </div>
+      )}
+
+      {/* RECORDER — always pinned at bottom */}
+      <div className="border-t border-line bg-white px-6 py-4">
+        <div className="max-w-2xl mx-auto">
+          <div className="min-h-[44px] mb-3 rounded border border-line bg-paper/50 px-3 py-2 font-mincho text-sm text-ink">
+            {draftText || (
+              <span className="text-ink-pale">
+                {isRecording
+                  ? "聞いています…"
+                  : isThinking
+                  ? "考え中…"
+                  : isSpeaking
+                  ? "話しています…"
+                  : "🎤 を押して話してみて"}
+              </span>
+            )}
+          </div>
+          <Waveform level={level} silent={silentNow} active={isRecording} />
+          <div className="mt-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={
+                  isRecording ? handleStopRecording : handleStartRecording
+                }
+                disabled={isThinking || isSpeaking}
+                className={`h-12 w-12 rounded-full flex items-center justify-center text-lg transition disabled:opacity-40 ${
+                  isRecording
+                    ? "bg-gold text-white animate-pulse-gold"
+                    : "border border-ink text-ink hover:bg-ink hover:text-paper"
+                }`}
+                aria-label={isRecording ? "録音停止" : "録音開始"}
+              >
+                🎤
+              </button>
+              <button
+                onClick={handleRedo}
+                disabled={!draftText || isThinking || isSpeaking}
+                className="px-3 py-2 text-xs border border-gold text-gold rounded hover:bg-gold-soft disabled:opacity-30"
+              >
+                録り直す
+                {redoCount > 0 && (
+                  <span className="mono ml-1 text-ink-pale">×{redoCount}</span>
+                )}
+              </button>
+            </div>
+            <button
+              onClick={handleObserve}
+              disabled={!draftText.trim() || isThinking || isSpeaking}
+              className="px-6 py-2.5 bg-ink text-paper text-sm font-mincho rounded hover:bg-ink-soft disabled:opacity-30"
+            >
+              観測する →
+            </button>
+          </div>
+          {!recognition.supported && (
+            <p className="mt-2 text-[11px] text-purple">
+              このブラウザは音声認識に未対応です。Chrome / Edge をご利用ください。
+            </p>
+          )}
+        </div>
       </div>
     </main>
   );
